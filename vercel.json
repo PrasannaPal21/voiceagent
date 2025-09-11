@@ -1,0 +1,15 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "framework": "nextjs",
+  "functions": {
+    "app/**/*.tsx": {
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "NEXT_PUBLIC_API_BASE_URL": "https://voice-be.subhadeep.xyz",
+    "NEXT_PUBLIC_WEBSOCKET_URL": "wss://websocket-hub.onrender.com",
+    "NEXT_PUBLIC_CALL_AGENT_URL": "https://54.91.122.177"
+  }
+}
