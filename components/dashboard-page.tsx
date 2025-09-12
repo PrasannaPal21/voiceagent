@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Phone, Users, Package, X, Check, TestTube, LogOut, History, Clock, User, MessageSquare } from "lucide-react";
 import { BASE_URL, CALL_AGENT_URL } from "@/lib/constants";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type Customer = {
   id: string;
@@ -122,6 +123,7 @@ const Dashboard: React.FC = () => {
   const [callHistory, setCallHistory] = useState<CallHistoryEntry[]>([]);
   const [showCallHistory, setShowCallHistory] = useState(false);
   const { isConnected, liveStatus, lastMessage, transcript, send, resetTranscript } = useWebSocket();
+  const [transcriptModalCall, setTranscriptModalCall] = useState<CallHistoryEntry | null>(null);
 
   // Call Agent API Base URL is now imported from constants
 
@@ -219,12 +221,37 @@ const Dashboard: React.FC = () => {
     if (lastMessage?.id) {
       setLastCallId(String(lastMessage.id));
       
-      // Update call history with transcript and customer interest
+      // Update call history with transcript and customer interest (with fallback if id doesn't match)
       if (lastMessage.conversation) {
-        updateCallHistory(String(lastMessage.id), {
-          transcript: lastMessage.conversation,
-          customerInterested: lastMessage.customer_interested,
-          status: lastMessage.status
+        setCallHistory(prev => {
+          let matched = false;
+          const updated = prev.map(entry => {
+            if (entry.callId === String(lastMessage.id)) {
+              matched = true;
+              return {
+                ...entry,
+                transcript: lastMessage.conversation,
+                customerInterested: lastMessage.customer_interested,
+                status: lastMessage.status
+              };
+            }
+            return entry;
+          });
+
+          if (!matched) {
+            const idx = updated.findIndex(e => !e.transcript || e.transcript.length === 0);
+            if (idx !== -1) {
+              const copy = [...updated];
+              copy[idx] = {
+                ...copy[idx],
+                transcript: lastMessage.conversation,
+                customerInterested: lastMessage.customer_interested,
+                status: lastMessage.status
+              };
+              return copy;
+            }
+          }
+          return updated;
         });
       }
     }
@@ -368,9 +395,10 @@ const Dashboard: React.FC = () => {
         const errorData = await response.json();
         throw new Error(errorData.message || "Call initiation failed");
       }
-    } catch (error) {
-      toast.error(`Failed to initiate test call: ${error.message}`);
-      console.error("Test call error:", error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to initiate test call: ${message}`);
+      console.error("Test call error:", err);
     }
   };
 
@@ -399,9 +427,10 @@ const Dashboard: React.FC = () => {
         console.error("Status API error:", response.status, errorText);
         throw new Error(`Failed to get call status: ${response.status}`);
       }
-    } catch (error) {
-      toast.error(`Failed to get call status: ${error.message}`);
-      console.error("Status error:", error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to get call status: ${message}`);
+      console.error("Status error:", err);
     }
   };
 
@@ -453,10 +482,11 @@ const Dashboard: React.FC = () => {
         toast.error(`Failed to end call: ${response.status} ${errorText}`);
         return;
       }
-    } catch (error) {
+    } catch (err) {
       // Check if it's a network error or other issue
-      console.error("End call error:", error);
-      toast.error(`Failed to end call: ${error.message}`);
+      console.error("End call error:", err);
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to end call: ${message}`);
     }
   };
 
@@ -563,9 +593,26 @@ const Dashboard: React.FC = () => {
                                 {call.status}
                               </span>
                             </div>
-                            <div className="flex items-center gap-2 text-xs text-gray-500">
-                              <Clock className="h-3 w-3" />
-                              {new Date(call.timestamp).toLocaleString()}
+                            <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-2 text-xs text-gray-500">
+                                <Clock className="h-3 w-3" />
+                                {new Date(call.timestamp).toLocaleString()}
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                disabled={!call.transcript || call.transcript.length === 0}
+                                onClick={() => {
+                                  if (!call.transcript || call.transcript.length === 0) {
+                                    toast.info("No transcript available");
+                                    return;
+                                  }
+                                  setTranscriptModalCall(call);
+                                }}
+                              >
+                                View transcript
+                              </Button>
                             </div>
                           </div>
                           
@@ -819,6 +866,30 @@ const Dashboard: React.FC = () => {
 
         </CardContent>
       </Card>
+
+      <Dialog open={!!transcriptModalCall} onOpenChange={(open) => { if (!open) setTranscriptModalCall(null); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Call transcript</DialogTitle>
+            <DialogDescription>
+              {transcriptModalCall ? `${transcriptModalCall.phoneNumber} • ${transcriptModalCall.productName} • ${new Date(transcriptModalCall.timestamp).toLocaleString()}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-80 overflow-y-auto space-y-2">
+            {transcriptModalCall?.transcript?.map((msg, idx) => (
+              <div key={idx} className={`text-sm p-2 rounded ${msg.role === 'assistant' ? 'bg-blue-50' : 'bg-gray-50'}`}>
+                <span className="font-medium capitalize">{msg.role}:</span> {msg.content}
+              </div>
+            ))}
+            {(!transcriptModalCall?.transcript || transcriptModalCall.transcript.length === 0) && (
+              <div className="text-sm text-gray-500">No transcript available</div>
+            )}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <Button variant="outline" onClick={() => setTranscriptModalCall(null)}>Close</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );
