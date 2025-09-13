@@ -10,6 +10,6 @@
   "env": {
     "NEXT_PUBLIC_API_BASE_URL": "https://voice-be.subhadeep.xyz",
     "NEXT_PUBLIC_WEBSOCKET_URL": "wss://websocket-hub.onrender.com",
-    "NEXT_PUBLIC_CALL_AGENT_URL": "http://backend-voiceagent.indominuslabs.in"
+    "NEXT_PUBLIC_CALL_AGENT_URL": "https://backend-voiceagent.indominuslabs.in"
   }
 }
