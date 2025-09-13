@@ -129,63 +129,72 @@ const Dashboard: React.FC = () => {
 
   // Call Agent API Base URL is now imported from constants
 
-  // Load call history from localStorage on component mount
-  useEffect(() => {
-    const loadFromDb = async () => {
-      // Check if supabase is available
-      if (!supabase) {
-        console.warn('Supabase not available, using local cache only');
-        const savedHistory = localStorage.getItem('callHistory');
-        if (savedHistory) {
-          try {
-            setCallHistory(JSON.parse(savedHistory));
-          } catch (error) {
-            console.error('Failed to parse call history:', error);
-          }
-        }
+  // Function to load call history from Supabase
+  const loadCallHistoryFromDb = async () => {
+    // Check if supabase is available
+    if (!supabase) {
+      console.warn('Supabase not available, call history will not be loaded');
+      setCallHistory([]);
+      return;
+    }
+
+    try {
+      const userId = localStorage.getItem('token') || 'anon';
+      console.log('Loading call history for user:', userId);
+      
+      const { data, error } = await supabase
+        .from(SUPABASE_TABLE_CALLS)
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+        
+      if (error) {
+        console.error('Supabase query error:', error);
+        setCallHistory([]);
         return;
       }
+      
+      if (data && data.length > 0) {
+        console.log('Loaded call history from Supabase:', data.length, 'calls');
+        const mapped: CallHistoryEntry[] = data.map((row: any) => ({
+          id: row.id,
+          phoneNumber: row.phone_number,
+          productName: row.product_name || '-',
+          callId: row.call_id || '-',
+          roomName: row.room_name || '-',
+          status: row.status || '-',
+          timestamp: row.created_at,
+          duration: undefined,
+          transcript: row.transcript || [],
+          customerInterested: typeof row.customer_preference === 'boolean' ? row.customer_preference : undefined,
+          notes: undefined,
+        }));
+        setCallHistory(mapped);
+      } else {
+        console.log('No call history found in Supabase for user:', userId);
+        setCallHistory([]);
+      }
+    } catch (err) {
+      console.error('Failed to load history from Supabase:', err);
+      setCallHistory([]);
+    }
+  };
 
-      try {
-        const userId = localStorage.getItem('token') || 'anon';
-        const { data, error } = await supabase
-          .from(SUPABASE_TABLE_CALLS)
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false });
-        if (error) throw error;
-        if (data) {
-          const mapped: CallHistoryEntry[] = data.map((row: any) => ({
-            id: row.id,
-            phoneNumber: row.phone_number,
-            productName: row.product_name || '-',
-            callId: row.call_id || '-',
-            roomName: row.room_name || '-',
-            status: row.status || '-',
-            timestamp: row.created_at,
-            duration: undefined,
-            transcript: row.transcript || [],
-            customerInterested: typeof row.customer_preference === 'boolean' ? row.customer_preference : undefined,
-            notes: undefined,
-          }));
-          setCallHistory(mapped);
-          return;
-        }
-      } catch (err) {
-        console.warn('Failed to load history from Supabase, using local cache if any', err);
-      }
-      // fallback to local cache
-      const savedHistory = localStorage.getItem('callHistory');
-      if (savedHistory) {
-        try {
-          setCallHistory(JSON.parse(savedHistory));
-        } catch (error) {
-          console.error('Failed to parse call history:', error);
-        }
-      }
-    };
-    loadFromDb();
+  // Load call history from Supabase on component mount
+  useEffect(() => {
+    loadCallHistoryFromDb();
   }, []);
+
+  // Periodically refresh call history to sync across devices
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (supabase) {
+        loadCallHistoryFromDb();
+      }
+    }, 30000); // Refresh every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [supabase]);
 
   // Save call history to localStorage whenever it changes
   useEffect(() => {
@@ -214,14 +223,18 @@ const Dashboard: React.FC = () => {
           created_at: entry.timestamp,
           updated_at: new Date().toISOString(),
         }, { onConflict: 'call_id' });
-      if (error) console.warn('Supabase upsert error:', error.message);
+      if (error) {
+        console.warn('Supabase upsert error:', error.message);
+      } else {
+        console.log('Successfully upserted call to Supabase:', entry.callId);
+      }
     } catch (err) {
       console.warn('Supabase upsert failed:', err);
     }
   };
 
   // Add call to history
-  const addToCallHistory = (entry: Omit<CallHistoryEntry, 'id' | 'timestamp'>) => {
+  const addToCallHistory = async (entry: Omit<CallHistoryEntry, 'id' | 'timestamp'>) => {
     const newEntry: CallHistoryEntry = {
       ...entry,
       id: `call-${Date.now()}`,
@@ -229,11 +242,13 @@ const Dashboard: React.FC = () => {
     };
     setCallHistory(prev => [newEntry, ...prev]);
     // fire-and-forget DB upsert
-    upsertCallToDb(newEntry);
+    await upsertCallToDb(newEntry);
+    // Reload from database to ensure sync across devices
+    setTimeout(() => loadCallHistoryFromDb(), 1000);
   };
 
   // Update call history entry
-  const updateCallHistory = (callId: string, updates: Partial<CallHistoryEntry>) => {
+  const updateCallHistory = async (callId: string, updates: Partial<CallHistoryEntry>) => {
     setCallHistory(prev => 
       prev.map(entry => 
         entry.callId === callId 
@@ -241,6 +256,15 @@ const Dashboard: React.FC = () => {
           : entry
       )
     );
+    
+    // Find the updated entry and upsert to database
+    const updatedEntry = callHistory.find(entry => entry.callId === callId);
+    if (updatedEntry) {
+      const mergedEntry = { ...updatedEntry, ...updates };
+      await upsertCallToDb(mergedEntry);
+      // Reload from database to ensure sync across devices
+      setTimeout(() => loadCallHistoryFromDb(), 1000);
+    }
   };
 
   // Fetch customers and products
@@ -533,7 +557,7 @@ const Dashboard: React.FC = () => {
       
       if (response.ok) {
         // Update call history
-        updateCallHistory(lastCallId, { status: "ended" });
+        await updateCallHistory(lastCallId, { status: "ended" });
 
         // Persist to Supabase (best-effort)
         if (supabase) {
@@ -579,7 +603,7 @@ const Dashboard: React.FC = () => {
           if (errorData.detail && errorData.detail.includes("room does not exist")) {
             // Room doesn't exist - call might have already ended naturally
             toast.info("Call has already ended or room expired");
-            updateCallHistory(lastCallId, { status: "ended" });
+            await updateCallHistory(lastCallId, { status: "ended" });
             setCurrentRoomName("");
             setLastCallId("-");
             setCallStatus("-");
@@ -667,9 +691,20 @@ const Dashboard: React.FC = () => {
       {showCallHistory && (
         <Card className="border-green-200 bg-green-50/50">
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-green-700 text-lg font-semibold">
-              <History className="h-5 w-5" />
-              Call History ({callHistory.length} calls)
+            <CardTitle className="flex items-center justify-between text-green-700 text-lg font-semibold">
+              <div className="flex items-center gap-2">
+                <History className="h-5 w-5" />
+                Call History ({callHistory.length} calls)
+              </div>
+              <Button
+                onClick={loadCallHistoryFromDb}
+                variant="outline"
+                size="sm"
+                className="text-green-600 hover:text-green-700 hover:bg-green-100"
+              >
+                <Clock className="h-4 w-4 mr-1" />
+                Refresh
+              </Button>
             </CardTitle>
           </CardHeader>
           <CardContent>
