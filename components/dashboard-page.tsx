@@ -132,6 +132,20 @@ const Dashboard: React.FC = () => {
   // Load call history from localStorage on component mount
   useEffect(() => {
     const loadFromDb = async () => {
+      // Check if supabase is available
+      if (!supabase) {
+        console.warn('Supabase not available, using local cache only');
+        const savedHistory = localStorage.getItem('callHistory');
+        if (savedHistory) {
+          try {
+            setCallHistory(JSON.parse(savedHistory));
+          } catch (error) {
+            console.error('Failed to parse call history:', error);
+          }
+        }
+        return;
+      }
+
       try {
         const userId = localStorage.getItem('token') || 'anon';
         const { data, error } = await supabase
@@ -180,6 +194,11 @@ const Dashboard: React.FC = () => {
 
   // Helper: upsert call to Supabase by call_id
   const upsertCallToDb = async (entry: CallHistoryEntry) => {
+    if (!supabase) {
+      console.warn('Supabase not available, skipping database upsert');
+      return;
+    }
+    
     try {
       const { error } = await supabase
         .from(SUPABASE_TABLE_CALLS)
@@ -517,28 +536,32 @@ const Dashboard: React.FC = () => {
         updateCallHistory(lastCallId, { status: "ended" });
 
         // Persist to Supabase (best-effort)
-        try {
-          const latest = callHistory.find(c => c.callId === lastMessage?.id) || callHistory[0];
-          if (latest) {
-            const { error: dbError } = await supabase
-              .from(SUPABASE_TABLE_CALLS)
-              .upsert({
-                user_id: localStorage.getItem("token") || "anon",
-                phone_number: latest.phoneNumber,
-                product_name: latest.productName,
-                call_id: latest.callId,
-                room_name: latest.roomName,
-                status: "ended",
-                customer_preference: typeof latest.customerInterested === 'boolean' ? latest.customerInterested : null,
-                transcript: latest.transcript ? JSON.parse(JSON.stringify(latest.transcript)) : null,
-                updated_at: new Date().toISOString(),
-              }, { onConflict: 'call_id' });
-            if (dbError) {
-              console.warn("Supabase insert error:", dbError.message);
+        if (supabase) {
+          try {
+            const latest = callHistory.find(c => c.callId === lastMessage?.id) || callHistory[0];
+            if (latest) {
+              const { error: dbError } = await supabase
+                .from(SUPABASE_TABLE_CALLS)
+                .upsert({
+                  user_id: localStorage.getItem("token") || "anon",
+                  phone_number: latest.phoneNumber,
+                  product_name: latest.productName,
+                  call_id: latest.callId,
+                  room_name: latest.roomName,
+                  status: "ended",
+                  customer_preference: typeof latest.customerInterested === 'boolean' ? latest.customerInterested : null,
+                  transcript: latest.transcript ? JSON.parse(JSON.stringify(latest.transcript)) : null,
+                  updated_at: new Date().toISOString(),
+                }, { onConflict: 'call_id' });
+              if (dbError) {
+                console.warn("Supabase insert error:", dbError.message);
+              }
             }
+          } catch (err) {
+            console.warn("Failed to persist call to Supabase", err);
           }
-        } catch (err) {
-          console.warn("Failed to persist call to Supabase", err);
+        } else {
+          console.warn("Supabase not available, skipping database persistence");
         }
         
         toast.success("Call ended successfully");
