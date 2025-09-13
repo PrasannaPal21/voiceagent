@@ -9,6 +9,8 @@ import { Phone, Users, Package, X, Check, TestTube, LogOut, History, Clock, User
 import { BASE_URL, CALL_AGENT_URL } from "@/lib/constants";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { supabase } from "@/lib/supabase";
+import { SUPABASE_TABLE_CALLS } from "@/lib/constants";
 
 type Customer = {
   id: string;
@@ -129,20 +131,75 @@ const Dashboard: React.FC = () => {
 
   // Load call history from localStorage on component mount
   useEffect(() => {
-    const savedHistory = localStorage.getItem('callHistory');
-    if (savedHistory) {
+    const loadFromDb = async () => {
       try {
-        setCallHistory(JSON.parse(savedHistory));
-      } catch (error) {
-        console.error('Failed to parse call history:', error);
+        const userId = localStorage.getItem('token') || 'anon';
+        const { data, error } = await supabase
+          .from(SUPABASE_TABLE_CALLS)
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        if (data) {
+          const mapped: CallHistoryEntry[] = data.map((row: any) => ({
+            id: row.id,
+            phoneNumber: row.phone_number,
+            productName: row.product_name || '-',
+            callId: row.call_id || '-',
+            roomName: row.room_name || '-',
+            status: row.status || '-',
+            timestamp: row.created_at,
+            duration: undefined,
+            transcript: row.transcript || [],
+            customerInterested: typeof row.customer_preference === 'boolean' ? row.customer_preference : undefined,
+            notes: undefined,
+          }));
+          setCallHistory(mapped);
+          return;
+        }
+      } catch (err) {
+        console.warn('Failed to load history from Supabase, using local cache if any', err);
       }
-    }
+      // fallback to local cache
+      const savedHistory = localStorage.getItem('callHistory');
+      if (savedHistory) {
+        try {
+          setCallHistory(JSON.parse(savedHistory));
+        } catch (error) {
+          console.error('Failed to parse call history:', error);
+        }
+      }
+    };
+    loadFromDb();
   }, []);
 
   // Save call history to localStorage whenever it changes
   useEffect(() => {
     localStorage.setItem('callHistory', JSON.stringify(callHistory));
   }, [callHistory]);
+
+  // Helper: upsert call to Supabase by call_id
+  const upsertCallToDb = async (entry: CallHistoryEntry) => {
+    try {
+      const { error } = await supabase
+        .from(SUPABASE_TABLE_CALLS)
+        .upsert({
+          user_id: localStorage.getItem('token') || 'anon',
+          phone_number: entry.phoneNumber,
+          product_name: entry.productName,
+          call_id: entry.callId,
+          room_name: entry.roomName,
+          status: entry.status,
+          customer_preference: typeof entry.customerInterested === 'boolean' ? entry.customerInterested : null,
+          transcript: entry.transcript ? JSON.parse(JSON.stringify(entry.transcript)) : null,
+          created_at: entry.timestamp,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'call_id' });
+      if (error) console.warn('Supabase upsert error:', error.message);
+    } catch (err) {
+      console.warn('Supabase upsert failed:', err);
+    }
+  };
 
   // Add call to history
   const addToCallHistory = (entry: Omit<CallHistoryEntry, 'id' | 'timestamp'>) => {
@@ -152,6 +209,8 @@ const Dashboard: React.FC = () => {
       timestamp: new Date().toISOString(),
     };
     setCallHistory(prev => [newEntry, ...prev]);
+    // fire-and-forget DB upsert
+    upsertCallToDb(newEntry);
   };
 
   // Update call history entry
@@ -248,9 +307,13 @@ const Dashboard: React.FC = () => {
                 customerInterested: lastMessage.customer_interested,
                 status: lastMessage.status
               };
+              // persist updated record
+              upsertCallToDb(copy[idx]);
               return copy;
             }
           }
+          // if matched, persist each potentially changed entry
+          updated.forEach(e => upsertCallToDb(e));
           return updated;
         });
       }
@@ -452,6 +515,31 @@ const Dashboard: React.FC = () => {
       if (response.ok) {
         // Update call history
         updateCallHistory(lastCallId, { status: "ended" });
+
+        // Persist to Supabase (best-effort)
+        try {
+          const latest = callHistory.find(c => c.callId === lastMessage?.id) || callHistory[0];
+          if (latest) {
+            const { error: dbError } = await supabase
+              .from(SUPABASE_TABLE_CALLS)
+              .upsert({
+                user_id: localStorage.getItem("token") || "anon",
+                phone_number: latest.phoneNumber,
+                product_name: latest.productName,
+                call_id: latest.callId,
+                room_name: latest.roomName,
+                status: "ended",
+                customer_preference: typeof latest.customerInterested === 'boolean' ? latest.customerInterested : null,
+                transcript: latest.transcript ? JSON.parse(JSON.stringify(latest.transcript)) : null,
+                updated_at: new Date().toISOString(),
+              }, { onConflict: 'call_id' });
+            if (dbError) {
+              console.warn("Supabase insert error:", dbError.message);
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to persist call to Supabase", err);
+        }
         
         toast.success("Call ended successfully");
         setCurrentRoomName("");

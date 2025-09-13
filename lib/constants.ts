@@ -8,4 +8,6 @@ export const WEBSOCKET_URL =
 
 export const CALL_AGENT_URL =
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_CALL_AGENT_URL) ||
-  "https://54.91.122.177";
+  "https://backend-voiceagent.indominuslabs.in";
+
+export const SUPABASE_TABLE_CALLS = "calls";
