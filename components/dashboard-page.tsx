@@ -11,6 +11,7 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { supabase } from "@/lib/supabase";
 import { SUPABASE_TABLE_CALLS } from "@/lib/constants";
+import { getCurrentUserId } from "@/lib/auth-utils";
 
 type Customer = {
   id: string;
@@ -139,7 +140,7 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const userId = localStorage.getItem('token') || 'anon';
+      const userId = getCurrentUserId();
       console.log('Loading call history for user:', userId);
       
       const { data, error } = await supabase
@@ -212,7 +213,7 @@ const Dashboard: React.FC = () => {
       const { error } = await supabase
         .from(SUPABASE_TABLE_CALLS)
         .upsert({
-          user_id: localStorage.getItem('token') || 'anon',
+          user_id: getCurrentUserId(),
           phone_number: entry.phoneNumber,
           product_name: entry.productName,
           call_id: entry.callId,
@@ -567,7 +568,7 @@ const Dashboard: React.FC = () => {
               const { error: dbError } = await supabase
                 .from(SUPABASE_TABLE_CALLS)
                 .upsert({
-                  user_id: localStorage.getItem("token") || "anon",
+                  user_id: getCurrentUserId(),
                   phone_number: latest.phoneNumber,
                   product_name: latest.productName,
                   call_id: latest.callId,
